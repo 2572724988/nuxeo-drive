@@ -41,6 +41,7 @@ from ...constants import (
     TransferStatus,
     UNACCESSIBLE_HASH,
 )
+from ...direct_transfer import DirectTransfer
 from ...exceptions import UnknownPairState
 from ...notification import Notification
 from ...objects import (
@@ -635,7 +636,7 @@ class EngineDAO(ConfigurationDAO):
         self.reinit_processors()
 
     def get_schema_version(self) -> int:
-        return 6
+        return 7
 
     def _migrate_state(self, cursor: Cursor) -> None:
         try:
@@ -691,6 +692,9 @@ class EngineDAO(ConfigurationDAO):
                 # so we can bypass the error
                 pass
             self.store_int(SCHEMA_VERSION, 6)
+        if version < 7:
+            self._create_direct_transfer_table(cursor)
+            self.store_int(SCHEMA_VERSION, 7)
 
     def _create_table(self, cursor: Cursor, name: str, force: bool = False) -> None:
         if name == "States":
@@ -727,6 +731,27 @@ class EngineDAO(ConfigurationDAO):
             "    batch          VARCHAR,"
             "    idx            INTEGER,"
             "    chunk_size     INTEGER,"
+            "    PRIMARY KEY (uid)"
+            ")"
+        )
+
+    @staticmethod
+    def _create_direct_transfer_table(cursor: Cursor):
+        cursor.execute(
+            "CREATE TABLE if not exists DirectTransfer ("
+            "    uid            INTEGER     NOT NULL,"
+            "    local_path     VARCHAR     UNIQUE,"
+            "    remote_path    VARCHAR,"
+            "    is_file        INTEGER,"
+            "    remote_ref     VARCHAR     DEFAULT NULL,"
+            "    file_size      INTEGER     DEFAULT 0,"
+            "    uploaded_size  INTEGER     DEFAULT 0,"
+            "    uploaded       INTEGER     DEFAULT 0,"
+            "    chunk_size     INTEGER     DEFAULT 0,"
+            "    replace_blob   INTEGER     DEFAULT 0,"
+            "    batch_id       VARCHAR     DEFAULT NULL,"
+            "    mpu_id         VARCHAR     DEFAULT NULL,"
+            # "    status         INTEGER,"
             "    PRIMARY KEY (uid)"
             ")"
         )
@@ -2167,6 +2192,25 @@ class EngineDAO(ConfigurationDAO):
             c = self._get_write_connection().cursor()
             c.execute(f"DELETE FROM {table} WHERE path = ?", (path,))
             self.transferUpdated.emit()
+
+    def add_direct_transfer(self, transfer: DirectTransfer) -> None:
+        """New Direct Transfer file/folder.
+        Upload details like upload IDs and chunk size will be filled later.
+        """
+        sql = (
+            "INSERT INTO DirectTransfer"
+            " (local_path, remote_path, is_file, file_size)"
+            " VALUES (?, ?, ?, ?)"
+        )
+        values = (
+            transfer.local_path,
+            transfer.remote_path,
+            transfer.is_file,
+            transfer.file_size,
+        )
+        with self.lock:
+            c = self._get_write_connection().cursor()
+            c.execute(sql, values)
 
     @staticmethod
     def _escape(text: str) -> str:

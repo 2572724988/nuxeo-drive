@@ -35,6 +35,7 @@ from ..constants import (
     DelAction,
     TransferStatus,
 )
+from ..direct_transfer import DirectTransferManager
 from ..exceptions import (
     EngineInitError,
     InvalidDriveException,
@@ -48,7 +49,6 @@ from ..utils import (
     current_thread_id,
     find_icon,
     find_suitable_tmp_dir,
-    get_tree_list,
     if_frozen,
     safe_filename,
     set_path_readonly,
@@ -215,6 +215,8 @@ class Engine(QObject):
 
         # Pause in case of no more space on the device
         self.noSpaceLeftOnDevice.connect(self.suspend)
+
+        self.direct_transfer_manager = DirectTransferManager()
 
     def __repr__(self) -> str:
         return (
@@ -388,35 +390,25 @@ class Engine(QObject):
                     f"{doc_pair.remote_parent_path}/{doc_pair.remote_ref}"
                 )
 
-    def direct_transfer(self, local_paths: Set[Path], remote_ref: str) -> None:
+    def direct_transfer(self, local_paths: Set[Path], remote_path: str) -> None:
         """Plan the Direct Transfer."""
-        # self.directTranferStatus.emit(local_path[0], True)
-
-        def plan(path: Path, remote_uid: str) -> None:
-            """Actions to do (refactored in a function to prevent duplicate code between files and folders)."""
-            # Save the remote folder's reference into the file/folder xattrs
-            try:
-                self.local.set_remote_id(path, remote_uid)
-            except PermissionError:
-                log.warning(
-                    f"Cannot set the remote ID on {path!r}, skipping the upload"
-                )
-                return
-
-            # Add the path into the database to plan the upload
-            info = self.local.get_info(path, check=False)
-            self.dao.insert_local_state(info, parent_path=None, local_state="direct")
-
         # Save the remote location for next times
-        self.dao.update_config("dt_last_remote_location", remote_ref)
+        self.dao.update_config("dt_last_remote_location", remote_path)
 
-        for local_path in sorted(local_paths):
-            if local_path.is_file():
-                plan(local_path, remote_ref)
-            else:
-                tree = sorted(get_tree_list(local_path, remote_ref))
-                for remote_path, path in tree:
-                    plan(path, remote_path)
+        # Reset Direct Transfer data (a new ID can be passed to the method, not yet used)
+        self.direct_transfer_manager.reset(uid=None)
+
+        # Add all paths to upload
+        self.direct_transfer_manager.add_all(local_paths, remote_path)
+
+        """
+        # Add the path into the database to plan the upload
+        for transfer in self.direct_transfer_manager:
+            self.dao.add_direct_transfer(transfer)
+        """
+
+        # And start the transfers!
+        self.direct_transfer_manager.start()
 
     def direct_transfer_cancel(self, file: Path) -> None:
         """Cancel the Direct Transfer of the given local *file*."""

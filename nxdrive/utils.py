@@ -320,11 +320,10 @@ def get_tree_list(
     """
     with os.scandir(path) as it:
         for entry in it:
-            if entry.is_file():
-                yield remote_ref, Path(entry.path)
-            elif entry.is_dir():
-                local_path = Path(entry.path)
-                yield remote_ref, local_path
+            local_path = Path(entry.path)
+            yield remote_ref, local_path
+
+            if entry.is_dir():
                 yield from get_tree_list(local_path, f"{remote_ref}/{entry.name}")
 
 

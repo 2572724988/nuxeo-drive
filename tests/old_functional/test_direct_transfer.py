@@ -92,6 +92,20 @@ class DirectTransfer:
         else:
             assert not self.has_blob()
 
+    def test_simple(self):
+        """Simple Direct Transfer test."""
+        engine = self.engine_1
+
+        # There is no upload, right now
+        self.no_uploads()
+
+        with ensure_no_exception():
+            engine.direct_transfer([self.file], self.ws.path)
+            self.sync_and_check()
+
+        # Ensure the remote path is saved for next times
+        assert engine.dao.get_config("dt_last_remote_location") == self.ws.path
+
     def test_with_engine_not_started(self):
         """A Direct Transfer should work even if engines are stopped."""
         pytest.xfail("Waiting for NXDRIVE-1910")
