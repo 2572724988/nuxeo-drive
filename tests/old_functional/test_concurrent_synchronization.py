@@ -1,5 +1,6 @@
 # coding: utf-8
 import time
+from uuid import uuid4
 
 from nxdrive.constants import WINDOWS
 
@@ -21,6 +22,11 @@ class TestConcurrentSynchronization(TwoUsersTest):
             delay=int(delay * 1000),
         )
 
+    @staticmethod
+    def salt():
+        """Simple salt to ensure file/folder unicity for each test."""
+        return str(uuid4()).split("-")[-1]
+
     def test_concurrent_file_access(self):
         """Test update/deletion of a locally locked file.
 
@@ -39,29 +45,31 @@ class TestConcurrentSynchronization(TwoUsersTest):
         local = self.local_1
         remote = self.remote_document_client_1
 
+        file_up = f"test_update-{self.salt()}.docx"
+        file_del = f"test_delete-{self.salt()}.docx"
+        file_other = f"other-{self.salt()}.docx"
+
         # Create file in the remote root workspace
-        uid = remote.make_file(
-            "/", "test_update.docx", content=b"Some content to update."
-        )
-        remote.make_file("/", "test_delete.docx", content=b"Some content to delete.")
+        uid = remote.make_file("/", file_up, content=b"Some content to update.")
+        remote.make_file("/", file_del, content=b"Some content to delete.")
 
         # Launch first synchronization
         self.wait_sync(wait_for_async=True)
-        assert local.exists("/test_update.docx")
-        assert local.exists("/test_delete.docx")
+        assert local.exists(f"/{file_up}")
+        assert local.exists(f"/{file_del}")
 
         # Open locally synchronized files to lock them and generate a
         # WindowsError when trying to update / delete them
-        file1_path = local.get_info("/test_update.docx").filepath
-        file2_path = local.get_info("/test_delete.docx").filepath
+        file1_path = local.get_info(f"/{file_up}").filepath
+        file2_path = local.get_info(f"/{file_del}").filepath
         with open(file1_path, "rb"), open(file2_path, "rb"):
             # Update /delete existing remote files and create a new remote file
             # Wait for 1 second to make sure the file's last modification time
             # will be different from the pair state's last remote update time
             time.sleep(REMOTE_MODIFICATION_TIME_RESOLUTION)
-            remote.update_content("/test_update.docx", b"Updated content.")
-            remote.delete("/test_delete.docx")
-            remote.make_file("/", "other.docx", content=b"Other content.")
+            remote.update_content(f"/{file_up}", b"Updated content.")
+            remote.delete(f"/{file_del}")
+            remote.make_file("/", file_other, content=b"Other content.")
 
             # Synchronize
             self.wait_sync(
@@ -75,29 +83,21 @@ class TestConcurrentSynchronization(TwoUsersTest):
                 # - Synchronization should not fail: doc pairs should be
                 #   blacklisted and other remote modifications should be
                 #   locally synchronized
-                assert local.exists("/test_update.docx")
-                assert (
-                    local.get_content("/test_update.docx") == b"Some content to update."
-                )
-                assert local.exists("/test_delete.docx")
-                assert (
-                    local.get_content("/test_delete.docx") == b"Some content to delete."
-                )
-                assert local.exists("/other.docx")
-                assert local.get_content("/other.docx") == b"Other content."
+                assert local.exists(f"/{file_up}")
+                assert local.get_content(f"/{file_up}") == b"Some content to update."
+                assert local.exists(f"/{file_del}")
+                assert local.get_content(f"/{file_del}") == b"Some content to delete."
+                assert local.exists(f"/{file_other}")
+                assert local.get_content(f"/{file_other}") == b"Other content."
 
                 # Synchronize again
                 self.wait_sync(enforce_errors=False, fail_if_timeout=False)
                 # Blacklisted files should be ignored as delay (60 seconds by
                 # default) is not expired, nothing should have changed
-                assert local.exists("/test_update.docx")
-                assert (
-                    local.get_content("/test_update.docx") == b"Some content to update."
-                )
-                assert local.exists("/test_delete.docx")
-                assert (
-                    local.get_content("/test_delete.docx") == b"Some content to delete."
-                )
+                assert local.exists(f"/{file_up}")
+                assert local.get_content(f"/{file_up}") == b"Some content to update."
+                assert local.exists(f"/{file_del}")
+                assert local.get_content(f"/{file_del}") == b"Some content to delete."
 
         if WINDOWS:
             # Cancel error delay to force retrying synchronization of pairs in error
@@ -110,9 +110,9 @@ class TestConcurrentSynchronization(TwoUsersTest):
         else:
             assert not (self.engine_1.download_dir / uid).is_dir()
 
-        assert local.exists("/test_update.docx")
-        assert local.get_content("/test_update.docx") == b"Updated content."
-        assert not local.exists("/test_delete.docx")
+        assert local.exists(f"/{file_up}")
+        assert local.get_content(f"/{file_up}") == b"Updated content."
+        assert not local.exists(f"/{file_del}")
 
     def test_find_changes_with_many_doc_creations(self):
         local = self.local_1
@@ -165,23 +165,26 @@ class TestConcurrentSynchronization(TwoUsersTest):
         assert local1.exists("/")
         assert local2.exists("/")
 
+        folder = f"Test folder {self.salt()}"
+        file = f"test-{self.salt()}.odt"
+
         # Make drive1 create a remote folder in the
         # test workspace and a file inside this folder,
         # then synchronize both devices
-        test_folder = remote.make_folder(self.workspace, "Test folder")
-        remote.make_file(test_folder, "test.odt", content=b"Some content.")
+        test_folder = remote.make_folder(self.workspace, folder)
+        remote.make_file(test_folder, file, content=b"Some content.")
 
         self.wait_sync(wait_for_async=True, wait_for_engine_2=True)
 
         # Test folder should be created locally on both devices
-        assert local1.exists("/Test folder")
-        assert local1.exists("/Test folder/test.odt")
-        assert local2.exists("/Test folder")
-        assert local2.exists("/Test folder/test.odt")
+        assert local1.exists(f"/{folder}")
+        assert local1.exists(f"/{folder}/{file}")
+        assert local2.exists(f"/{folder}")
+        assert local2.exists(f"/{folder}/{file}")
 
         # Delete Test folder locally on one of the devices
-        local1.delete("/Test folder")
-        assert not local1.exists("/Test folder")
+        local1.delete(f"/{folder}")
+        assert not local1.exists(f"/{folder}")
 
         # Wait for synchronization engines to complete
         # Wait for Windows delete and also async
@@ -189,8 +192,8 @@ class TestConcurrentSynchronization(TwoUsersTest):
 
         # Test folder should be deleted on the server and on both devices
         assert not remote.exists(test_folder)
-        assert not local1.exists("/Test folder")
-        assert not local2.exists("/Test folder")
+        assert not local1.exists(f"/{folder}")
+        assert not local2.exists(f"/{folder}")
 
     def test_delete_local_folder_delay_remote_changes_fetch(self):
         # Get local and remote clients
@@ -204,21 +207,24 @@ class TestConcurrentSynchronization(TwoUsersTest):
         # Test workspace should be created locally
         assert local.exists("/")
 
+        folder = f"Test folder {self.salt()}"
+        file = f"test-{self.salt()}.odt"
+
         # Create a local folder in the test workspace and a file inside
         # this folder, then synchronize
-        folder = local.make_folder("/", "Test folder")
-        local.make_file(folder, "test.odt", content=b"Some content.")
+        folder_uid = local.make_folder("/", folder)
+        local.make_file(folder_uid, file, content=b"Some content.")
 
         self.wait_sync()
 
         # Test folder should be created remotely in the test workspace
-        assert remote.exists("/Test folder")
-        assert remote.exists("/Test folder/test.odt")
+        assert remote.exists(f"/{folder}")
+        assert remote.exists(f"/{folder}/{file}")
 
         # Delete Test folder locally before fetching remote changes,
         # then synchronize
-        local.delete("/Test folder")
-        assert not local.exists("/Test folder")
+        local.delete(f"/{folder}")
+        assert not local.exists(f"/{folder}")
 
         self.wait_sync()
 
@@ -231,10 +237,10 @@ class TestConcurrentSynchronization(TwoUsersTest):
         # see Model.update_remote().
         # Thus the pair state will be ('deleted', 'synchronized'), resolved as
         # 'locally_deleted'.
-        assert not remote.exists("Test folder")
+        assert not remote.exists(folder)
 
         # Check Test folder has not been re-created locally
-        assert not local.exists("/Test folder")
+        assert not local.exists(f"/{folder}")
 
     def test_rename_local_folder(self):
         # Get local and remote clients
@@ -250,13 +256,19 @@ class TestConcurrentSynchronization(TwoUsersTest):
         assert local1.exists("/")
         assert local2.exists("/")
 
-        # Create a local folder in the test workspace and a file inside
-        # this folder, then synchronize
-        local1.make_folder("/", "Test folder")
-        local1.rename("/Test folder", "Renamed folder")
+        salt = self.salt()
+        folder = f"Test folder {salt}"
+        folder_renamed = f"Renamed folder {salt}"
+
+        # Create a local folder in the test workspace and a rename it
+        local1.make_folder("/", folder)
+        local1.rename(f"/{folder}", folder_renamed)
+        assert local1.exists(f"/{folder_renamed}")
+        assert not local1.exists(f"/{folder}")
+
         self.wait_sync(wait_for_async=True, wait_for_engine_2=True)
-        assert local1.exists("/Renamed folder")
-        assert local2.exists("/Renamed folder")
+        assert local1.exists(f"/{folder_renamed}")
+        assert local2.exists(f"/{folder_renamed}")
 
     def test_delete_local_folder_update_remote_folder_property(self):
         # Get local and remote clients
@@ -270,23 +282,26 @@ class TestConcurrentSynchronization(TwoUsersTest):
         # Test workspace should be created locally
         assert local.exists("/")
 
+        folder = f"Test folder {self.salt()}"
+        file = f"test-{self.salt()}.odt"
+
         # Create a local folder in the test workspace and a file inside
         # this folder, then synchronize
-        folder = local.make_folder("/", "Test folder")
-        local.make_file(folder, "test.odt", content=b"Some content.")
+        folder = local.make_folder("/", folder)
+        local.make_file(folder, file, content=b"Some content.")
 
         self.wait_sync()
 
         # Test folder should be created remotely in the test workspace
-        assert remote.exists("/Test folder")
-        assert remote.exists("/Test folder/test.odt")
+        assert remote.exists(f"/{folder}")
+        assert remote.exists(f"/{folder}/{file}")
 
         # Delete Test folder locally and remotely update one of its properties
         # concurrently, then synchronize
         self.engine_1.suspend()
-        local.delete("/Test folder")
-        assert not local.exists("/Test folder")
-        test_folder_ref = remote.check_ref("/Test folder")
+        local.delete(f"/{folder}")
+        assert not local.exists(f"/{folder}")
+        test_folder_ref = remote.check_ref(f"/{folder}")
         # Wait for 1 second to make sure the folder's last modification time
         # will be different from the pair state's last remote update time
         time.sleep(REMOTE_MODIFICATION_TIME_RESOLUTION)
@@ -300,10 +315,10 @@ class TestConcurrentSynchronization(TwoUsersTest):
         self.wait_sync(wait_for_async=True)
 
         # Test folder should be deleted remotely in the test workspace.
-        assert not remote.exists("/Test folder")
+        assert not remote.exists(f"/{folder}")
 
         # Check Test folder has not been re-created locally
-        assert not local.exists("/Test folder")
+        assert not local.exists(f"/{folder}")
 
     def test_update_local_file_content_update_remote_file_property(self):
         # Get local and remote clients
@@ -317,21 +332,23 @@ class TestConcurrentSynchronization(TwoUsersTest):
         # Test workspace should be created locally
         assert local.exists("/")
 
+        file = f"test-{self.salt()}.odt"
+
         # Create a local file in the test workspace then synchronize
-        local.make_file("/", "test.odt", content=b"Some content.")
+        local.make_file("/", file, content=b"Some content.")
 
         self.wait_sync()
 
         # Test file should be created remotely in the test workspace
-        assert remote.exists("/test.odt")
+        assert remote.exists(f"/{file}")
 
         self.engine_1.queue_manager.suspend()
         # Locally update the file content and remotely update one of its
         # properties concurrently, then synchronize
         time.sleep(OS_STAT_MTIME_RESOLUTION)
-        local.update_content("/test.odt", b"Updated content.")
-        assert local.get_content("/test.odt") == b"Updated content."
-        test_file_ref = remote.check_ref("/test.odt")
+        local.update_content(f"/{file}", b"Updated content.")
+        assert local.get_content(f"/{file}") == b"Updated content."
+        test_file_ref = remote.check_ref(f"/{file}")
         # Wait for 1 second to make sure the file's last modification time
         # will be different from the pair state's last remote update time
         time.sleep(REMOTE_MODIFICATION_TIME_RESOLUTION)
@@ -353,13 +370,13 @@ class TestConcurrentSynchronization(TwoUsersTest):
         # 'modified', see Model.update_remote().
         # Thus the pair state will be ('modified', 'synchronized'), resolved as
         # 'locally_modified'.
-        assert remote.exists("/test.odt")
-        assert remote.get_content("/test.odt") == b"Updated content."
+        assert remote.exists(f"/{file}")
+        assert remote.get_content(f"/{file}") == b"Updated content."
         test_file = remote.fetch(test_file_ref)
         assert test_file["properties"]["dc:description"] == "Some description."
         assert len(remote.get_children_info(self.workspace)) == 1
 
         # Check that the content of the test file has not changed
-        assert local.exists("/test.odt")
-        assert local.get_content("/test.odt") == b"Updated content."
+        assert local.exists(f"/{file}")
+        assert local.get_content(f"/{file}") == b"Updated content."
         assert len(local.get_children_info("/")) == 1
